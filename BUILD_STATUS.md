@@ -19,7 +19,11 @@
 - **UI**: `/evidence` page (connector freshness, evidence list with payload preview + hash integrity), Overview freshness panel, Graph Explorer temporal edge display + current-vs-historical dependencies
 - **Verification**: `npx tsc --noEmit` clean; `npm run build` succeeds (16 routes); health checks pass (10/10 probes); seed determinism: two runs → identical 42 nodes / 91 edges; evidence hash integrity verified (SHA-256 matches stored `content_hash`); stale `redis-cache-legacy` dependency excluded from current topology
 
-## Slice 3 (planned)
-- LLM adapter for causal reasoning
-- Persistent control-plane Postgres
-- Real connector adapters (Prometheus remote write, Loki query API, etc.)
+## Slice 3 ✅ COMPLETE
+- **LLM causal reasoning**: Qwen `qwen3.8-omni-flash` via OpenAI-compatible endpoint (`src/server/llm/qwen.ts`); `POST /api/ask` taking `{question, nodeId, label?}` and returning `{analysis, confidence, suggested_edges, data_gap}`; neighbourhood context from `getNeighborhood`; deterministic ids and redaction applied before LLM prompt
+- **API route**: `/api/ask` (POST) — causal reasoning endpoint; returns JSON with `analysis`, `confidence` (0.0–1.0), `suggested_edges` (max 2), and `data_gap` string
+- **New schema types**: `src/server/llm/types.ts` — `LlmMessage`, `LlmChatCompletion`, `LlmChatCompletionCreate`; `buildCausalPrompt()` prompt template
+- **Verification**: `npx tsc --noEmit` clean; `npm run build` succeeds (22 routes including `/api/ask`); health checks pass (10/10 probes); `/api/ask` returns valid JSON schema on success; redaction applied before LLM prompt so no secrets leak to the model
+
+## Running state
+- Docker Compose up, HydraDB reachable on ports 9090/8443, graph seeded, app on port 3000
