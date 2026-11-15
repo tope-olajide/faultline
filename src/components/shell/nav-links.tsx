@@ -2,7 +2,18 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Activity, FileJson, LayoutDashboard, Network } from 'lucide-react'
+import {
+  Activity,
+  Boxes,
+  BrainCircuit,
+  FileJson,
+  FlaskConical,
+  LayoutDashboard,
+  Layers,
+  Network,
+  Radar,
+  Rocket,
+} from 'lucide-react'
 import { cn } from '@/lib/cn'
 
 const GROUPS = [
@@ -10,13 +21,26 @@ const GROUPS = [
     label: 'Workspace',
     items: [
       { href: '/', label: 'Overview', icon: LayoutDashboard },
+      { href: '/incidents', label: 'Incidents', icon: Radar },
+      { href: '/services', label: 'Services', icon: Boxes },
+      { href: '/deployments', label: 'Deployments', icon: Rocket },
+    ],
+  },
+  {
+    label: 'Intelligence',
+    items: [
       { href: '/graph', label: 'Graph Explorer', icon: Network },
-      { href: '/evidence', label: 'Evidence', icon: FileJson },
+      { href: '/patterns', label: 'Failure Patterns', icon: Layers },
+      { href: '/learning', label: 'Learning Engine', icon: BrainCircuit },
+      { href: '/evaluation', label: 'Evaluation Lab', icon: FlaskConical },
     ],
   },
   {
     label: 'System',
-    items: [{ href: '/diagnostics', label: 'HydraDB Diagnostics', icon: Activity }],
+    items: [
+      { href: '/evidence', label: 'Evidence', icon: FileJson },
+      { href: '/diagnostics', label: 'HydraDB Diagnostics', icon: Activity },
+    ],
   },
 ] as const
 
@@ -30,7 +54,8 @@ export function NavLinks() {
           <div className="eyebrow px-3 pb-1.5">{group.label}</div>
           <ul className="flex flex-col gap-0.5">
             {group.items.map((item) => {
-              const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href))
+              const active =
+                pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href))
               const Icon = item.icon
               return (
                 <li key={item.href}>

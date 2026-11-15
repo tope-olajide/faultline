@@ -88,7 +88,28 @@ seeding to confirm the write landed.
 - `GRAPH_ALLOW_PLAINTEXT=true` is required for a local plaintext node. Deployed
   instances require TLS and a real token.
 
-## 6. Open questions to settle before later slices
+## 6. Findings from the investigation/evaluation takeover (2026-11-15)
+
+| Shape | Result | Consequence |
+|---|---|---|
+| `MATCH (i:Incident {id:$id})-[:AFFECTS]->(s:Service) RETURN s.id, s.external_id, s.name` | Works | Incident scope resolution |
+| `MATCH (a:Service)-[r:DEPENDS_ON]->(b:Database) RETURN a.id, b.id, r.confidence_score, r.support_count, r.contradiction_count` | Works; missing props decode as `null` | One scan per target label is used to build the dependency graph |
+| `MATCH (b:Service)-[:DEPENDS_ON*1..3]->(s:Service {id:$id})` | **Rejected:** “variable-length MATCH requires a fixed source id” | Reverse blast radius is computed in the application from a bounded edge scan |
+| `MATCH (d:Deployment)-[:DEPLOYS]->(s:Service {id:$id})` | Works | Deployment candidate discovery |
+| `MATCH (e:Evidence)-[:DERIVED_FROM]->(c:Database {id:$id})` | Works | Evidence attribution to a candidate cause |
+| `MATCH (e:Evidence)-[:OBSERVED_DURING]->(i:Incident {id:$id})` | Works | Incident evidence isolation |
+| `MATCH (a {id:$src})-[r:TYPE]->(b {id:$dst}) SET r.confidence_score=$c, r.support_count=$s, r.contradiction_count=$k, r.verification_state=$v` | Works | Learning updates are a single read-modify-write per edge |
+| `MATCH (e:EvaluationRun) RETURN … ORDER BY e.completed_at DESC` | Works | Evaluation history |
+| `CALL algo.SPpaths({relTypes:['DEPENDS_ON'], sourceNode, targetNode, maxLen, pathCount})` | Returns multi-hop paths with capitalised property tags | Causal path provenance |
+
+**Identity defect found and fixed.** `upsertNodes` used `externalId` only as hash
+input. HydraDB does not treat `external_id` specially, so reads projected `null`
+until the repository began writing it as a property. Any new node type must
+include `external_id` in its write map.
+
+---
+
+## 7. Open questions to settle before later slices
 
 - Whether `weightProp` / `costProp` in `algo.*` are interpreted as cost (lower =
   better). Until verified, path ranking is computed in the application layer.

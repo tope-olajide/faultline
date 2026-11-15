@@ -143,3 +143,125 @@ API returns a typed `503` and the UI shows the specific failure.
 **Why.** A silent fallback would make "HydraDB is the system of record" untrue and
 hide integration breakage during development. The demo requirement is satisfied
 by shipping HydraDB in Compose, not by faking it.
+
+---
+
+## D9 — The investigator is deterministic, not an LLM
+
+**Decision.** `src/server/investigation/engine.ts` produces hypotheses from real
+graph traversal and an explicit score. The Qwen adapter stays available for
+optional narration but is not on the product path.
+
+**Why.** Reproducible evaluation requires the same retrieval and ranking
+conditions for all three engines. A model that paraphrases causes would make the
+learning delta unmeasurable and would risk inventing evidence. Every statement in
+the workspace is backed by a relationship or an evidence node.
+
+---
+
+## D10 — Explicit investigation score
+
+**Decision.**
+
+```text
+score = 0.50 · evidenceScore
+      + 0.20 · edgeReliability   (live or frozen baseline)
+      + 0.30 · pathTemplateScore (learned rounds only)
+      − contradictionPenalty
+confidence = 0.05 + 0.92 · score
+```
+
+`evidenceScore = support / (support + 1.2)` saturates so a single strong item
+cannot dominate; support is `reliability × evidenceTypeWeight × freshness`.
+
+**Why.** Each term is inspectable and independently measurable. Keeping the
+weights in one place makes the baseline/adaptive comparison meaningful: the only
+difference is whether live reliability and path utility are read.
+
+---
+
+## D11 — Path signatures are context-constrained
+
+**Decision.** A template key is
+`<signalClass>|<causeLabel>:<relationshipSequence>:<dominantEvidenceType>`.
+`signalClass` is derived from the incident title/summary (change, queue, cache,
+latency), never from ground truth.
+
+**Why.** Without context, a database path learned from latency incidents boosted
+a database distractor in deployment incidents, capping held-out Top-1 at 0.83.
+Adding the text-derived context raised it to 1.00 and is the kind of constraint
+the specification asks for. A learned path is only reused where the incident
+class matches.
+
+---
+
+## D12 — Frozen `baseline_confidence`
+
+**Decision.** Dependency edges store both the mutable `confidence_score` and an
+immutable `baseline_confidence` written at seed time.
+
+**Why.** The fixed-graph baseline must remain reproducible after learning mutates
+the live graph. Without a frozen value the “fixed” engine would silently become
+another adaptive engine.
+
+---
+
+## D13 — Learning outcome policy
+
+**Decision.** Confirm: `+1` support and close 35% of the confidence gap.
+Contributing: `+0.5`, 15%. Reject: `+1` contradiction, cut 45%. Incorrect
+mapping: cut 60%. Stale: `+0.5` contradiction, cut 25%, mark `stale`. Inconclusive:
+no numeric change.
+
+**Why.** The policy is conservative, bounded and auditable. Inconclusive is
+recorded but never treated as negative. Stale relationships are marked rather than
+deleted so temporal history survives.
+
+---
+
+## D14 — Evidence must belong to the incident
+
+**Decision.** A candidate only receives evidence whose `Evidence` node is linked
+by `OBSERVED_DURING` to the incident under investigation.
+
+**Why.** One shared graph means a database node accumulates evidence from every
+incident that mentioned it. Incident linkage is the correct temporal/contextual
+boundary and is cheaper than a time-window heuristic.
+
+---
+
+## D15 — TF-IDF vector baseline, labelled honestly
+
+**Decision.** The vector-only engine ranks evidence by TF-IDF cosine over
+summaries and attributes the best chunk to its cause. No embeddings are used.
+
+**Why.** An embedding index would add a dependency and an external key without
+changing the comparison’s structure. The evaluation screen states the limitation
+explicitly; replacing the scorer is isolated to one function.
+
+---
+
+## D16 — The pre-learning round is always untrained
+
+**Decision.** `R0` evaluates the adaptive engine with frozen `baseline_confidence`
+and no path templates. `R1` uses live reliability and learned path utility.
+
+**Why.** Recomputing R0 against a graph that already contains training feedback
+produced a contaminated “before” score on subsequent experiment runs (0% on a
+fresh seed, 100% on a retrained graph). Fixing R0 to the untrained state makes the
+before/after delta reproducible: two consecutive runs both measure 0.000 → 1.000.
+The trade-off is that R0 intentionally equals the fixed-graph control, which is
+the honest definition of “no learned signal”.
+
+---
+
+## D17 — Historical matching looks only backwards
+
+**Decision.** Similar incidents are computed from shared `AFFECTS` services,
+failure family, signal class and recency, and only incidents with an earlier
+`started_at` are eligible.
+
+**Why.** Matching must not leak a held-out incident’s future context or its own
+benchmark label into an investigation. The similarity is computed from graph
+links and incident text, while the benchmark cause is shown separately and
+labelled as a benchmark value, never as an engineer confirmation.

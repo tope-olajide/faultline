@@ -6,6 +6,7 @@ import {
   deleteNodes,
   graphStats,
   invalidateStatsCache,
+  listNodes,
   upsertEdges,
   upsertNodes,
   type EdgeInput,
@@ -14,6 +15,7 @@ import {
 } from './repository'
 import { collectSimulatedEvidence, simulatedConnectors, SCENARIO } from '../integrations/simulator'
 import { ingestEvidence } from '../evidence/ingest'
+import { benchmarkNodeIds, seedBenchmarkGraph, type BenchmarkSummary } from './benchmark'
 
 /**
  * Demo dataset — a deterministic checkout platform with one open incident.
@@ -62,8 +64,12 @@ function dependencyEdge(
     lastSeenAt?: string
   } = {},
 ): PropertyMap {
+  const confidence = options.confidence ?? 0.93
   return {
-    confidence_score: options.confidence ?? 0.93,
+    confidence_score: confidence,
+    // Frozen prior used by the fixed-graph evaluation baseline. Learning only
+    // mutates `confidence_score`, so the baseline stays reproducible.
+    baseline_confidence: confidence,
     support_count: options.verificationState === 'provisional' ? 1 : 4,
     contradiction_count: 0,
     verification_state: options.verificationState ?? 'verified',
@@ -322,6 +328,11 @@ const baseNodes: SeedNode[] = [
       summary:
         'Checkout p99 exceeded 2s with a 7.4% 5xx rate. Gateway and payment-service alerts fired five minutes later.',
       impact: 'Checkout conversion down an estimated 12% for 21 minutes.',
+      benchmark_split: 'demo',
+      ground_truth_cause: 'database/postgres-main/production',
+      ground_truth_evidence:
+        'evidence/ev-metric-pool-wait,evidence/ev-trace-db-timeout,evidence/ev-log-pool-exhausted',
+      family: 'db_pool',
     },
   },
   {
@@ -577,7 +588,19 @@ const edges: SeedEdge[] = [
   },
 
   { from: 'repository', to: 'commit', type: 'CONTAINS' },
-  { from: 'deployment', to: 'svc-checkout', type: 'DEPLOYS' },
+  {
+    from: 'deployment',
+    to: 'svc-checkout',
+    type: 'DEPLOYS',
+    properties: {
+      confidence_score: 0.95,
+      baseline_confidence: 0.95,
+      support_count: 2,
+      contradiction_count: 0,
+      verification_state: 'verified',
+      source: 'github-deployments',
+    },
+  },
   { from: 'deployment', to: 'environment', type: 'DEPLOYED_TO' },
   { from: 'deployment', to: 'commit', type: 'CHANGED_BY' },
 
@@ -623,6 +646,7 @@ export interface SeedSummary {
   byRelationship: Record<string, number>
   totals: { nodes: number; relationships: number }
   bookmark: string | null
+  benchmark: BenchmarkSummary
 }
 
 export function demoNodeIds(scope: DemoScope = demoScope): number[] {
@@ -636,6 +660,7 @@ export function demoNodeIds(scope: DemoScope = demoScope): number[] {
     ...nodes.map((node) => demoEntityId(node.label, node.externalId, scope)),
     ...evidenceIds,
     ...connectorIds,
+    ...benchmarkNodeIds(scope),
   ]
 }
 
@@ -647,6 +672,26 @@ export async function seedDemoGraph(
   const ids = demoNodeIds(scope)
 
   const deleted = await deleteNodes(ids)
+
+  // Learning state is derived from the seeded graph, so re-seeding must clear it
+  // rather than leave ledger entries that describe mutations the fresh edges no
+  // longer carry.
+  let clearedLearning = 0
+  for (const label of [
+    'PathTemplate',
+    'Feedback',
+    'LearningUpdate',
+    'EvaluationRun',
+    'EntityMatchCandidate',
+    'Investigation',
+    'Hypothesis',
+  ] as const) {
+    const nodes = await listNodes(label, { limit: 200 })
+    if (nodes.length > 0) {
+      const result = await deleteNodes(nodes.map((node) => node.id))
+      clearedLearning += result.deleted
+    }
+  }
 
   const idByKey = new Map<string, number>()
   for (const node of nodes) idByKey.set(node.key, demoEntityId(node.label, node.externalId, scope))
@@ -686,6 +731,9 @@ export async function seedDemoGraph(
   // Write evidence payloads into object storage and the graph.
   const ingestion = await ingestEvidence(evidenceDrafts, scope)
 
+  // Seed the held-out benchmark incidents used by the evaluation lab.
+  const benchmark = await seedBenchmarkGraph(scope)
+
   invalidateStatsCache()
   const stats = await graphStats({ fresh: true })
 
@@ -702,11 +750,12 @@ export async function seedDemoGraph(
     edges: edgeResult.written + ingestion.relationships,
     nodeRequests: nodeResult.requests,
     edgeRequests: edgeResult.requests,
-    deleted: deleted.deleted,
+    deleted: deleted.deleted + clearedLearning,
     durationMs: Date.now() - started,
     byLabel,
     byRelationship,
     totals: { nodes: stats.totalNodes, relationships: stats.totalRelationships },
     bookmark: edgeResult.bookmark ?? nodeResult.bookmark,
+    benchmark,
   }
 }

@@ -7,13 +7,24 @@ import { Badge } from '@/components/ui/primitives'
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Overview',
+  '/incidents': 'Incidents',
+  '/services': 'Services',
+  '/deployments': 'Deployments',
+  '/patterns': 'Failure Patterns',
   '/graph': 'Graph Explorer',
+  '/evidence': 'Evidence',
+  '/learning': 'Learning Engine',
+  '/evaluation': 'Evaluation Lab',
   '/diagnostics': 'HydraDB Diagnostics',
 }
 
 export function TopBar({ project, environment }: { project: string; environment: string }) {
   const pathname = usePathname()
-  const pageTitle = PAGE_TITLES[pathname] ?? 'Overview'
+  const pageTitle = pathname.startsWith('/incidents/')
+    ? 'Incident workspace'
+    : pathname.startsWith('/services/')
+      ? 'Service detail'
+      : (PAGE_TITLES[pathname] ?? 'Overview')
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b border-line bg-canvas/85 px-4 backdrop-blur-md lg:px-6">
@@ -47,7 +58,7 @@ export function TopBar({ project, environment }: { project: string; environment:
         <Badge tone="violet" className="hidden md:inline-flex">
           Demo dataset
         </Badge>
-        <span className="mono hidden text-[11px] text-ink-faint xl:inline">14 Nov 2026 · 15:21 UTC</span>
+        <span className="mono hidden text-[11px] text-ink-faint xl:inline">12 incidents · 6 held out</span>
       </div>
     </header>
   )

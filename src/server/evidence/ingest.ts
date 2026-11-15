@@ -57,6 +57,7 @@ export async function ingestEvidence(
         content_hash: stored.contentHash,
         reliability: draft.reliability,
         redaction_status: redactionStatus,
+        polarity: draft.polarity ?? 'supports',
       },
     })
 

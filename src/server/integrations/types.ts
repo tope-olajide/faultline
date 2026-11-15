@@ -28,6 +28,13 @@ export interface EvidenceDraft {
   summary: string
   /** Prior reliability of this source for this evidence type, 0..1. */
   reliability: number
+  /**
+   * Direction of the observation with respect to the entity it is attributed to.
+   * `supports` is the default; `contradicts` marks evidence that argues against a
+   * candidate explanation (e.g. all pods healthy during a suspected crash loop).
+   * Polarity is assigned during ingestion/normalization, never by the investigator.
+   */
+  polarity?: 'supports' | 'contradicts' | 'neutral'
   payload: Record<string, unknown>
   /** Where the evidence came from: `Service GENERATED Evidence`. */
   generatedBy?: EvidenceLink

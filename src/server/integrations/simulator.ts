@@ -68,7 +68,13 @@ const prometheusSource: EvidenceSource = {
         'Database connection wait p99 rose from 12 ms to 1.94 s on checkout-service, with the pool fully consumed from 15:17 UTC.',
       reliability: 0.92,
       generatedBy: serviceLink,
-      derivedFrom: [{ label: 'MetricSeries', externalId: SCENARIO.metricSeries, type: 'DERIVED_FROM' }],
+      polarity: 'supports',
+      derivedFrom: [
+        { label: 'MetricSeries', externalId: SCENARIO.metricSeries, type: 'DERIVED_FROM' },
+        // Attributed directly to the infrastructure entity the observation is about,
+        // so graph traversal can attach evidence to a candidate cause.
+        { label: 'Database', externalId: 'database/postgres-main/production', type: 'DERIVED_FROM' },
+      ],
       observedDuring: [incidentLink],
       payload: {
         provider: 'prometheus',
@@ -114,7 +120,11 @@ const lokiSource: EvidenceSource = {
         '2,410 pool-acquisition failures from pgx inside the incident window, and none in the preceding hour.',
       reliability: 0.85,
       generatedBy: serviceLink,
-      derivedFrom: [{ label: 'LogPattern', externalId: SCENARIO.logPattern, type: 'DERIVED_FROM' }],
+      polarity: 'supports',
+      derivedFrom: [
+        { label: 'LogPattern', externalId: SCENARIO.logPattern, type: 'DERIVED_FROM' },
+        { label: 'Database', externalId: 'database/postgres-main/production', type: 'DERIVED_FROM' },
+      ],
       observedDuring: [incidentLink],
       payload: {
         provider: 'loki',
@@ -166,7 +176,11 @@ const tempoSource: EvidenceSource = {
         '38% of checkout spans block on postgres-main for more than 2 s; the slow span starts after a successful auth call, which rules out gateway saturation.',
       reliability: 0.88,
       generatedBy: serviceLink,
-      derivedFrom: [{ label: 'Trace', externalId: SCENARIO.trace, type: 'DERIVED_FROM' }],
+      polarity: 'supports',
+      derivedFrom: [
+        { label: 'Trace', externalId: SCENARIO.trace, type: 'DERIVED_FROM' },
+        { label: 'Database', externalId: 'database/postgres-main/production', type: 'DERIVED_FROM' },
+      ],
       observedDuring: [incidentLink],
       payload: {
         provider: 'tempo',
@@ -212,6 +226,7 @@ const githubSource: EvidenceSource = {
         'checkout-service@2.14.3 completed 26 hours before onset, and no deployment occurred inside the incident window.',
       reliability: 0.7,
       generatedBy: serviceLink,
+      polarity: 'neutral',
       derivedFrom: [{ label: 'Deployment', externalId: SCENARIO.deployment, type: 'DERIVED_FROM' }],
       observedDuring: [incidentLink],
       payload: {
@@ -250,7 +265,11 @@ const kubernetesSource: EvidenceSource = {
         'All 6 checkout-service pods stayed Ready with zero restarts and no OOMKilled events during the window.',
       reliability: 0.9,
       generatedBy: serviceLink,
-      derivedFrom: [{ label: 'Event', externalId: SCENARIO.podEvent, type: 'DERIVED_FROM' }],
+      polarity: 'contradicts',
+      derivedFrom: [
+        { label: 'Event', externalId: SCENARIO.podEvent, type: 'DERIVED_FROM' },
+        { label: 'Workload', externalId: 'workload/checkout-service-7d9f', type: 'DERIVED_FROM' },
+      ],
       observedDuring: [incidentLink],
       payload: {
         provider: 'kubernetes',

@@ -131,8 +131,15 @@ export async function upsertNodes(
     assertIdentifier(label, 'label')
     for (const batch of chunk(group, WRITE_CHUNK)) {
       const rows = batch.map((node) => {
-        const properties = { ...scopeProperties(scope), ...(node.properties ?? {}) }
-        delete properties.id
+        // `external_id` is the natural identity from the source system. HydraDB's
+        // `id` is only an upsert key, so the readable identity must be stored as
+        // a property or every read projects `null`.
+        const properties = {
+          ...scopeProperties(scope),
+          ...(node.properties ?? {}),
+          external_id: node.externalId,
+        }
+        delete (properties as Record<string, unknown>).id
         assertPrimitiveProperties(properties, `${label} ${node.externalId}`)
         return { id: nodeId(node, scope), ...properties }
       })
@@ -141,7 +148,7 @@ export async function upsertNodes(
       // otherwise bind a missing map field to null.
       const keys = new Set<string>()
       for (const node of batch) {
-        for (const key of Object.keys({ ...scopeProperties(scope), ...(node.properties ?? {}) })) {
+        for (const key of Object.keys({ ...scopeProperties(scope), ...(node.properties ?? {}), external_id: node.externalId })) {
           keys.add(key)
         }
       }
@@ -413,6 +420,7 @@ export async function getNeighborhood(
 
   const edgeKeys = [
     'confidence_score',
+    'baseline_confidence',
     'support_count',
     'contradiction_count',
     'verification_state',
@@ -522,313 +530,3 @@ export async function probeGraph(): Promise<{ ok: boolean; projects: number; err
   }
 }
 
-
-/** Track a feedback request key for idempotency. Returns true if this is a new request. */
-export async function trackFeedbackKey(requestKey: string): Promise<{ newRequest: boolean; alreadyProcessed: boolean }> {
-  // Check if already processed by looking for a Feedback node with this external_id
-  const existing = await graphClient().query<{ count: number }>(`
-    MATCH (f:Feedback {external_id: $key})
-    RETURN count(f) AS count
-  `, { key: requestKey })
-  const already = Number(existing.rows[0]?.count ?? 0) > 0
-  return { newRequest: !already, alreadyProcessed: already }
-}
-
-/** Submit engineer feedback and mutate the graph durably.
- *  - Creates a Feedback node (if requestKey is new)
- *  - Mutates edge reliability per the outcome (support_count / contradiction_count / confidence_score)
- *  - Creates a LearningUpdate record
- *  - Returns the Feedback node and edge changes
- *  - Idempotent: replays of the same requestKey apply nothing twice
- */
-export async function submitFeedback({
-  requestKey,
-  outcome,
-  actorRef,
-  reason,
-  linkedEvidenceId,
-  targetEdgeId,
-}: {
-  requestKey: string
-  outcome: 'confirm' | 'reject' | 'contributing_factor' | 'inconclusive' | 'stale_relationship' | 'incorrect_mapping'
-  actorRef: string
-  reason: string
-  linkedEvidenceId: number
-  targetEdgeId: { src: number; dst: number; type: RelationshipType }
-}): Promise<{ feedback: NodeRecord | null; edgeChanges: EdgeMutationResult }> {
-  const { newRequest, alreadyProcessed } = await trackFeedbackKey(requestKey)
-  if (!newRequest) {
-    // Replay: no graph mutations, return null feedback
-    return { feedback: null, edgeChanges: { support_delta: 0, contradiction_delta: 0, confidence_delta: 0 } }
-  }
-
-  // Create Feedback node
-  const feedbackCreated = await upsertNodes([
-    {
-      label: 'Feedback',
-      externalId: requestKey,
-      properties: {
-        external_id: requestKey,
-        outcome,
-        actor_ref: actorRef,
-        reason,
-        created_at: new Date().toISOString(),
-        linked_evidence_id: String(linkedEvidenceId),
-      },
-    },
-  ])
-
-  // Reconstruct feedback record from what was written
-  const feedbackRecord: NodeRecord = {
-    id: feedbackCreated.written > 0 ? 1 : 0,
-    label: 'Feedback' as const,
-    properties: {
-      external_id: requestKey,
-      outcome,
-      actor_ref: actorRef,
-      reason,
-      created_at: new Date().toISOString(),
-      linked_evidence_id: String(linkedEvidenceId),
-    },
-  }
-
-  // Mutate edge reliability based on outcome
-  let supportDelta = 0
-  let contradictionDelta = 0
-  let confidenceDelta = 0
-
-  const outcomeLower = outcome as string
-
-  if (outcomeLower === 'confirm') {
-    // Confirm root cause: increase support_count, nudge confidence up
-    supportDelta = 1
-    confidenceDelta = 0.1
-  } else if (outcomeLower === 'reject') {
-    // Reject root cause: increase contradiction_count, nudge confidence down
-    contradictionDelta = 1
-    confidenceDelta = -0.1
-  } else if (outcomeLower === 'contributing_factor') {
-    // Mark as contributing factor: small support nudge
-    supportDelta = 0.5
-    confidenceDelta = 0.05
-  } else if (outcomeLower === 'inconclusive') {
-    // Inconclusive: no reliability change (per spec)
-    confidenceDelta = 0
-  } else if (outcomeLower === 'stale_relationship') {
-    // Mark relationship as stale: could set valid_to on the edge
-    // For now, just record in learning update
-    confidenceDelta = 0
-  } else if (outcomeLower === 'incorrect_mapping') {
-    // Incorrect mapping: increase contradiction, lower confidence
-    contradictionDelta = 1
-    confidenceDelta = -0.15
-  }
-
-  // Apply edge mutation via inline SET
-  const { src, dst, type } = targetEdgeId
-  const setClauses: string[] = [`r.confidence_score = r.confidence_score + $delta`]
-  const params: Record<string, unknown> = { delta: confidenceDelta }
-  if (supportDelta !== 0) {
-    setClauses.push(`r.support_count = r.support_count + $support`)
-    params.support = supportDelta
-  }
-  if (contradictionDelta !== 0) {
-    setClauses.push(`r.contradiction_count = r.contradiction_count + $contradiction`)
-    params.contradiction = contradictionDelta
-  }
-
-  const setClause = setClauses.join(', ')
-  const query = `
-    MATCH (a {id: $src})-[r:${type}]->(b {id: $dst})
-    SET ${setClause}
-  RETURN r {.*}`
-  const result = await graphClient().query<{ r: Record<string, unknown> }>(query, {
-    src,
-    dst,
-    ...params,
-  })
-
-  const edgeResult = result.rows.length > 0
-    ? { support_delta: supportDelta, contradiction_delta: contradictionDelta, confidence_delta: confidenceDelta }
-    : { support_delta: 0, contradiction_delta: 0, confidence_delta: 0 }
-
-  // Create LearningUpdate record
-  await upsertNodes([
-    {
-      label: 'LearningUpdate',
-      externalId: `learn-${requestKey}`,
-      properties: {
-        external_id: `learn-${requestKey}`,
-        update_type: outcomeLower,
-        before_state: JSON.stringify({ confidence: 0, support_count: 0, contradiction_count: 0 }),
-        after_state: JSON.stringify({ confidence: 0, support_count: 0, contradiction_count: 0 }),
-        reason,
-        created_at: new Date().toISOString(),
-        status: 'completed',
-      },
-    },
-  ])
-
-  return { feedback: feedbackRecord, edgeChanges: edgeResult }
-}
-
-/** Edge mutation result type. */
-export interface EdgeMutationResult {
-  support_delta: number
-  contradiction_delta: number
-  confidence_delta: number
-}
-
-
-/** Track a path template for reuse in causal analysis. */
-export async function trackPathTemplate(signature: string): Promise<{ newRequest: boolean; alreadyProcessed: boolean }> {
-  // Check if already processed by looking for a PathTemplate with this signature
-  const existing = await graphClient().query<{ count: number }>(`
-    MATCH (p:PathTemplate {signature: $sig})
-    RETURN count(p) AS count
-  `, { sig: signature })
-  const already = Number(existing.rows[0]?.count ?? 0) > 0
-  return { newRequest: !already, alreadyProcessed: already }
-}
-
-/** Create a new PathTemplate node and return it. */
-export async function createPathTemplate({
-  signature,
-  pathScore = 0,
-  successCount = 0,
-  failureCount = 0,
-}: {
-  signature: string
-  pathScore?: number
-  successCount?: number
-  failureCount?: number
-}): Promise<NodeRecord> {
-  const created = await upsertNodes([
-    {
-      label: 'PathTemplate',
-      externalId: `pt-${signature}`,
-      properties: {
-        external_id: `pt-${signature}`,
-        signature,
-        path_score: pathScore,
-        success_count: successCount,
-        failure_count: failureCount,
-        created_at: new Date().toISOString(),
-      },
-    },
-  ])
-  return {
-    id: created.written > 0 ? 1 : 0,
-    label: 'PathTemplate' as const,
-    properties: {
-      external_id: `pt-${signature}`,
-      signature,
-      path_score: pathScore,
-      success_count: successCount,
-      failure_count: failureCount,
-      created_at: new Date().toISOString(),
-    },
-  }
-}
-
-/** Record an EvaluationRun for a causal analysis question. */
-export async function createEvaluationRun({
-  question,
-  nodeId,
-  label,
-  analysis,
-  confidence,
-  suggestedEdges,
-  dataGap,
-}: {
-  question: string
-  nodeId: number
-  label: string
-  analysis: string
-  confidence: number
-  suggestedEdges: Array<{ type: string; reason: string }>
-  dataGap: string
-}): Promise<NodeRecord> {
-  const externalId = `eval-${nodeId}-${Date.now()}`
-  const created = await upsertNodes([
-    {
-      label: 'EvaluationRun',
-      externalId,
-      properties: {
-        external_id: externalId,
-        question,
-        node_id: String(nodeId),
-        label,
-        analysis,
-        confidence: String(confidence),
-        suggested_edges: JSON.stringify(suggestedEdges),
-        data_gap: dataGap,
-        created_at: new Date().toISOString(),
-        status: 'completed',
-      },
-    },
-  ])
-  return {
-    id: created.written > 0 ? 1 : 0,
-    label: 'EvaluationRun' as const,
-    properties: {
-      external_id: externalId,
-      question,
-      node_id: String(nodeId),
-      label,
-      analysis,
-      confidence: String(confidence),
-      suggested_edges: JSON.stringify(suggestedEdges),
-      data_gap: dataGap,
-      created_at: new Date().toISOString(),
-      status: 'completed',
-    },
-  }
-}
-
-/** Entity match candidate - tracks a candidate entity match for deduplication. */
-export async function createEntityMatchCandidate({
-  leftExternalId,
-  rightExternalId,
-  leftLabel,
-  rightLabel,
-  similarityScore,
-}: {
-  leftExternalId: string
-  rightExternalId: string
-  leftLabel: GraphLabel
-  rightLabel: GraphLabel
-  similarityScore: number
-}): Promise<NodeRecord> {
-  const externalId = `emc-${leftExternalId}-${rightExternalId}`
-  const created = await upsertNodes([
-    {
-      label: 'EntityMatchCandidate',
-      externalId,
-      properties: {
-        external_id: externalId,
-        left_external_id: leftExternalId,
-        right_external_id: rightExternalId,
-        left_label: leftLabel,
-        right_label: rightLabel,
-        similarity_score: String(similarityScore),
-        created_at: new Date().toISOString(),
-        status: 'pending',
-      },
-    },
-  ])
-  return {
-    id: created.written > 0 ? 1 : 0,
-    label: 'EntityMatchCandidate' as const,
-    properties: {
-      external_id: externalId,
-      left_external_id: leftExternalId,
-      right_external_id: rightExternalId,
-      left_label: leftLabel,
-      right_label: rightLabel,
-      similarity_score: String(similarityScore),
-      created_at: new Date().toISOString(),
-      status: 'pending',
-    },
-  }
-}
