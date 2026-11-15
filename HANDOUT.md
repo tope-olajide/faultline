@@ -82,4 +82,4 @@
 
 ## Notes for the next slice
 
-- No further slices planned at this time. The project currently has 4 complete slices (Slice 1: graph schema + seed, Slice 2: evidence + temporal + integrations, Slice 3: LLM causal reasoning, Slice 4: engineer feedback and learning ledger). Future work may include Postgres control-plane, real connector adapters, and expanded UI features.
+- No further slices planned at this time. The project currently has 5 complete slices (Slice 1: graph schema + seed, Slice 2: evidence + temporal + integrations, Slice 3: LLM causal reasoning, Slice 4: engineer feedback and learning ledger, Slice 5: path templates, entity matching, evaluation runs). Future work may include Postgres control-plane, real connector adapters, and expanded UI features.

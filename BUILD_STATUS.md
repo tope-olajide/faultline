@@ -41,3 +41,11 @@
 - **New edge properties tracked**: `confidence_score`, `support_count`, `contradiction_count`
 - **Idempotency**: feedback carries a request key; replays do not double-apply (verified via `trackFeedbackKey` check)
 - **Verification**: `npx tsc --noEmit` clean; `npm run build` succeeds (23 routes); health checks pass (10/10 probes); idempotency verified (replaying same requestKey applies nothing twice)
+
+## Slice 5 COMPLETE
+- PathTemplate system: create, track idempotently, and reuse path templates through the graph for causal analysis
+- Signature-based dedup: trackPathTemplate(signature) prevents duplicate templates; createPathTemplate stores signature, path_score, success/failure counts
+- EvaluationRun records: per-causal-analysis tracking with question, nodeId, label, analysis, confidence (0-1), suggested_edges, data_gap, and status
+- EntityMatchCandidate: tracks candidate entity matches across graph with left_external_id, right_external_id, left_label, right_label, similarity_score (0-1) and status: pending
+- New API routes: POST /api/path-template, POST /api/evaluation, POST /api/entity-match; all with input validation and idempotency checks
+- Verification: npx tsc --noEmit clean; npm run build succeeds (26 routes); health checks pass (10/10 probes)
