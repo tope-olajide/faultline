@@ -1,0 +1,175 @@
+@import 'tailwindcss';
+
+/*
+ * Faultline design tokens.
+ *
+ * Palette names follow the product specification; utility names are shortened
+ * for ergonomics: canvas, sidebar, surface, raised, hover, line, ink, muted,
+ * accent, cyan, success, warning, danger, violet.
+ */
+@theme {
+  --color-canvas: #090d12;
+  --color-sidebar: #0c121a;
+  --color-surface: #111923;
+  --color-raised: #162230;
+  --color-hover: #1b2938;
+  --color-line: #253447;
+  --color-line-strong: #34465c;
+  --color-ink: #e8eef5;
+  --color-ink-dim: #a2afbd;
+  --color-ink-faint: #718093;
+  --color-accent: #70a7ff;
+  --color-cyan: #57c7d4;
+  --color-success: #43c58b;
+  --color-warning: #e7ad55;
+  --color-danger: #f06f78;
+  --color-violet: #a78bfa;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, 'SFMono-Regular', 'IBM Plex Mono', monospace;
+
+  --radius-panel: 10px;
+  --radius-card: 12px;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 28%, transparent);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
+    outline-offset: 2px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.011em;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border-radius: 999px;
+    border: 3px solid var(--color-canvas);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-line-strong);
+  }
+}
+
+@layer components {
+  /* Eyebrow label: 10–11px, uppercase, modest tracking. */
+  .eyebrow {
+    font-size: 10.5px;
+    line-height: 1.2;
+    letter-spacing: 0.085em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+    font-weight: 600;
+  }
+
+  /* Panel: the primary surface unit. */
+  .panel {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-panel);
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  .hairline {
+    border-color: var(--color-line);
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .data-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+  }
+
+  .data-table thead th {
+    text-align: left;
+    font-size: 10.5px;
+    letter-spacing: 0.085em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+    font-weight: 600;
+    padding: 9px 16px;
+    background-color: color-mix(in oklab, var(--color-surface) 92%, black);
+    border-bottom: 1px solid var(--color-line);
+    white-space: nowrap;
+  }
+
+  .data-table tbody td {
+    padding: 10px 16px;
+    border-bottom: 1px solid color-mix(in oklab, var(--color-line) 62%, transparent);
+    vertical-align: middle;
+  }
+
+  .data-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .data-table tbody tr {
+    transition: background-color 120ms ease;
+  }
+
+  .data-table tbody tr:hover {
+    background-color: color-mix(in oklab, var(--color-hover) 45%, transparent);
+  }
+
+  .link-quiet {
+    color: var(--color-ink);
+    text-decoration: none;
+    transition: color 120ms ease;
+  }
+  .link-quiet:hover {
+    color: var(--color-accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
