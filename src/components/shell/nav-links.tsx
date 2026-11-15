@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Activity, LayoutDashboard, Network } from 'lucide-react'
+import { Activity, FileJson, LayoutDashboard, Network } from 'lucide-react'
 import { cn } from '@/lib/cn'
 
 const GROUPS = [
@@ -11,6 +11,7 @@ const GROUPS = [
     items: [
       { href: '/', label: 'Overview', icon: LayoutDashboard },
       { href: '/graph', label: 'Graph Explorer', icon: Network },
+      { href: '/evidence', label: 'Evidence', icon: FileJson },
     ],
   },
   {

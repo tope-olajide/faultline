@@ -65,7 +65,7 @@ export type GraphLabel = (typeof GRAPH_LABELS)[number]
 export const RELATIONSHIPS = {
   CONTAINS: {
     from: ['Organization', 'Project', 'Environment', 'Repository', 'Cluster', 'Namespace'],
-    to: ['Project', 'Environment', 'Service', 'Workload', 'Commit', 'Deployment'],
+    to: ['Project', 'Environment', 'Service', 'Workload', 'Commit', 'Deployment', 'Namespace', 'ConnectorSource'],
   },
   BELONGS_TO: { from: ['Service', 'Resource', 'Workload', 'Endpoint'], to: ['Project', 'Environment', 'Team'] },
   DEPENDS_ON: {
@@ -73,7 +73,10 @@ export const RELATIONSHIPS = {
     to: ['Service', 'Database', 'Cache', 'Queue', 'Resource'],
   },
   CALLS: { from: ['Service', 'Endpoint'], to: ['Service', 'Endpoint'] },
-  RUNS_ON: { from: ['Service', 'Workload', 'Database', 'Cache', 'Queue'], to: ['Cluster', 'Namespace', 'Resource'] },
+  RUNS_ON: {
+    from: ['Service', 'Workload', 'Database', 'Cache', 'Queue'],
+    to: ['Cluster', 'Namespace', 'Resource', 'Workload'],
+  },
   DEPLOYED_TO: { from: ['Deployment'], to: ['Environment', 'Workload'] },
   DEPLOYS: { from: ['Deployment'], to: ['Service'] },
   INTRODUCED_BY: { from: ['Service', 'Incident', 'Finding'], to: ['Commit', 'PullRequest', 'Deployment', 'ConfigChange'] },
@@ -83,7 +86,7 @@ export const RELATIONSHIPS = {
     from: ['Service', 'Workload', 'Database', 'Cache', 'Queue', 'Cluster'],
     to: ['Alert', 'Event', 'MetricSeries', 'LogPattern', 'Trace', 'Evidence', 'Observation'],
   },
-  OBSERVED_DURING: { from: ['Evidence', 'Observation', 'Alert', 'Trace'], to: ['Incident', 'Investigation'] },
+  OBSERVED_DURING: { from: ['Evidence', 'Observation', 'Alert', 'Trace', 'Event'], to: ['Incident', 'Investigation'] },
   AFFECTS: { from: ['Incident', 'Alert', 'FailurePattern'], to: ['Service', 'Resource', 'Database', 'Cache', 'Queue', 'Workload'] },
   TRIGGERED: { from: ['Alert', 'Event'], to: ['Incident'] },
   CORRELATED_WITH: { from: ['Evidence', 'Incident', 'Alert'], to: ['Evidence', 'Incident', 'Alert'] },
@@ -92,7 +95,7 @@ export const RELATIONSHIPS = {
   CAUSED_BY: { from: ['Incident', 'Finding'], to: ['Service', 'Deployment', 'Commit', 'ConfigChange', 'Resource', 'Database'] },
   POSSIBLY_CAUSED_BY: {
     from: ['Incident', 'Hypothesis', 'Finding'],
-    to: ['Service', 'Deployment', 'Commit', 'ConfigChange', 'Resource', 'Database', 'Cache', 'Queue'],
+    to: ['Service', 'Deployment', 'Commit', 'ConfigChange', 'Resource', 'Database', 'Cache', 'Queue', 'Workload'],
   },
   RESOLVED_BY: { from: ['Incident', 'FailurePattern'], to: ['Resolution', 'Runbook'] },
   MATCHES_PATTERN: { from: ['Incident', 'Evidence', 'Hypothesis'], to: ['FailurePattern'] },
@@ -215,6 +218,11 @@ export const NODE_PROPERTY_KEYS = definePropertyKeys({
   Environment: ['external_id', 'name', 'environment_type', 'region'],
   Team: ['external_id', 'name', 'slack_ref'],
   Cluster: ['external_id', 'name', 'provider'],
+  Namespace: ['external_id', 'name', 'cluster'],
+  Workload: ['external_id', 'kind', 'name', 'replicas', 'image', 'namespace'],
+  ConfigChange: ['external_id', 'key', 'change_type', 'changed_at', 'summary', 'actor', 'redacted_diff_ref'],
+  Event: ['external_id', 'event_type', 'occurred_at', 'source', 'severity', 'summary'],
+  ConnectorSource: ['external_id', 'provider', 'resource', 'last_synced_at', 'status', 'last_error', 'permission_scope'],
   Service: ['external_id', 'name', 'language', 'criticality', 'repo_url', 'owner_team', 'created_at', 'summary'],
   Database: ['external_id', 'name', 'engine', 'tier'],
   Cache: ['external_id', 'name', 'engine', 'tier'],

@@ -11,8 +11,9 @@ import {
   VerificationBadge,
 } from '@/components/ui/primitives'
 import { getGraphHealth } from '@/server/health'
-import { getNeighborhood, getNode, listNodes, type NeighborEdge } from '@/server/graph/repository'
-import { displayProperty, isGraphLabel, type GraphLabel } from '@/server/graph/schema'
+import { getDependencies, getNeighborhood, getNode, listNodes, type NeighborEdge } from '@/server/graph/repository'
+import { displayProperty, isGraphLabel, OPEN_ENDED, type GraphLabel } from '@/server/graph/schema'
+import { defaultAsOf, isCurrent } from '@/server/graph/temporal'
 import { formatUtc, humanizePropertyKey, pluralize } from '@/lib/format'
 
 export const dynamic = 'force-dynamic'
@@ -59,6 +60,18 @@ export default async function GraphExplorerPage({ searchParams }: PageProps) {
   const outgoing = edges.filter((edge) => edge.direction === 'outgoing')
   const incoming = edges.filter((edge) => edge.direction === 'incoming')
   const totalNodes = stats?.totalNodes ?? 0
+
+  let currentDeps: Awaited<ReturnType<typeof getDependencies>> | null = null
+  let historicalDeps: Awaited<ReturnType<typeof getDependencies>> | null = null
+  if (selected && effectiveLabel === 'Service') {
+    try {
+      currentDeps = await getDependencies(selected.id, effectiveLabel, { mode: 'current' })
+      historicalDeps = await getDependencies(selected.id, effectiveLabel, { mode: 'history' })
+    } catch {
+      currentDeps = null
+      historicalDeps = null
+    }
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
@@ -220,6 +233,58 @@ export default async function GraphExplorerPage({ searchParams }: PageProps) {
                         <EdgeGroup title="Incoming" edges={incoming} direction="in" label={effectiveLabel} />
                       </div>
                     )}
+
+                  {selected && effectiveLabel === 'Service' && (currentDeps || historicalDeps) ? (
+                    <div className="mt-4 border-t border-line pt-4">
+                      <div className="eyebrow mb-2">Temporal dependencies</div>
+                      <div className="flex flex-col gap-3">
+                        <div>
+                          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.085em] text-ink-faint">
+                            In force now · {currentDeps?.dependencies.length ?? 0}
+                          </div>
+                          <ul className="flex flex-col gap-1">
+                            {(currentDeps?.dependencies ?? []).map((edge, index) => (
+                              <li key={`cur-${edge.neighborId}-${index}`} className="rounded-md border border-line bg-canvas/40 px-2.5 py-1.5">
+                                <Link
+                                  href={`/graph?label=${edge.neighborLabel}&node=${edge.neighborId}`}
+                                  className="link-quiet block truncate text-[12px] font-medium"
+                                >
+                                  {edge.display ?? `#${edge.neighborId}`}
+                                </Link>
+                                <span className="text-[10.5px] text-ink-faint">{edge.neighborLabel}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {(currentDeps?.dependencies.length ?? 0) === 0 ? (
+                            <p className="text-[11px] text-ink-faint">None.</p>
+                          ) : null}
+                        </div>
+                        <div>
+                          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.085em] text-ink-faint">
+                            Retired · {historicalDeps?.dependencies.length ?? 0}
+                          </div>
+                          <ul className="flex flex-col gap-1">
+                            {(historicalDeps?.dependencies ?? []).map((edge, index) => (
+                              <li key={`hist-${edge.neighborId}-${index}`} className="rounded-md border border-line bg-canvas/40 px-2.5 py-1.5 opacity-70">
+                                <Link
+                                  href={`/graph?label=${edge.neighborLabel}&node=${edge.neighborId}`}
+                                  className="link-quiet block truncate text-[12px] font-medium"
+                                >
+                                  {edge.display ?? `#${edge.neighborId}`}
+                                </Link>
+                                <span className="text-[10.5px] text-ink-faint">
+                                  {edge.neighborLabel} · ended {String(edge.edge.valid_to)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                          {(historicalDeps?.dependencies.length ?? 0) === 0 ? (
+                            <p className="text-[11px] text-ink-faint">None.</p>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                   </div>
                 </div>
               ) : (
@@ -276,6 +341,20 @@ function EdgeGroup({
                   <span className="mono text-[10.5px] text-ink-faint">confidence {confidence.toFixed(2)}</span>
                 ) : null}
               </div>
+              {edge.edge.valid_from ? (
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="mono text-[10px] text-ink-faint">
+                    {String(edge.edge.valid_from)} → {String(edge.edge.valid_to) === OPEN_ENDED ? 'open' : String(edge.edge.valid_to)}
+                  </span>
+                  <Badge
+                    tone={
+                      isCurrent(edge.edge.valid_from, edge.edge.valid_to, defaultAsOf()) ? 'success' : 'neutral'
+                    }
+                  >
+                    {isCurrent(edge.edge.valid_from, edge.edge.valid_to, defaultAsOf()) ? 'current' : 'historical'}
+                  </Badge>
+                </div>
+              ) : null}
             </li>
           )
         })}

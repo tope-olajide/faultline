@@ -1,0 +1,41 @@
+# Faultline Handout
+
+## What is implemented
+
+- **Slice 1** (complete, pushed): Compose stack + typed HydraDB adapter + schema (39 labels / 29 rel types) + deterministic entity ids (FNV-1a over scope\0label\0externalId) + repository with batch upsert / per-edge MERGE + demo seed (28 nodes / 67 edges) + API routes (11 routes) + Overview, Graph Explorer, Diagnostics screens + scripts + internal docs (`docs/TECHNICAL_DECISIONS.md`, `docs/KNOWN_ISSUES.md`, etc.)
+
+- **Slice 2** (complete): 
+  - **Security**: recursive secret-key redaction (`src/server/security/redact.ts`) applied before any payload persistence or LLM use
+  - **Evidence model**: local object store (`src/server/evidence/object-store.ts`) with stable-stringify JSON, SHA-256 hash, `.hydradb/evidence` directory, `local://evidence/<hash>.json` URIs; integrity-verified readback
+  - **Integrations**: 6 simulator adapters (`src/server/integrations/simulator.ts`) — prometheus, loki, tempo, github, kubernetes, config-audit — all returning `EvidenceDraft[]` plus `ConnectorState` freshness records; normalized schema in `src/server/integrations/types.ts`
+  - **Ingestion**: `src/server/evidence/ingest.ts` writes payloads (redacted, hashed) to object store, then creates Evidence graph nodes + `GENERATED`/`OBSERVED_DURING`/`DERIVED_FROM` edges
+  - **Temporal**: sentinel-based `OPEN_ENDED = '9999-12-31T23:59:59.999Z'` (`src/server/graph/temporal.ts`); `isCurrent()` / `currentTopologyFilter()` / `closedTopologyFilter()`; server-side `WHERE r.valid_from <= $asOf AND r.valid_to > $asOf` filtering in `getDependencies()`
+  - **Schema**: `Workload` added to `RUNS_ON.to`; property keys for `Namespace`, `Workload`, `ConfigChange`, `Event`, `ConnectorSource`; `ConnectorSource` in `CONTAINS.to`; `Evidence`/`Observation`/`Alert`/`Trace` in `OBSERVED_DURING.from`; `Event` in `OBSERVED_DURING.from`; `Workload` in `POSSIBLY_CAUSED_BY.to`
+  - **Seed**: retired `redis-cache-legacy` cache with closed stale DEPENDS_ON edge (valid_to 2026-10-02); current DEPENDS_ON from 2026-10-02; Namespace `prod-checkout`; Workload `checkout-service-7d9f`; ConfigChange `cache-migration-2026-10-02`; k8s Event; 5 `ConnectorSource` nodes; evidence payloads ingested into graph
+  - **API routes**: `/api/evidence`, `/api/evidence/[id]`, `/api/graph/topology`, `/api/connectors`
+  - **UI**: `/evidence` page (connector freshness, evidence list with payload preview + hash integrity), Overview freshness panel, Graph Explorer temporal edge display + current-vs-historical dependencies
+
+- **Running state**: Docker Compose up, HydraDB reachable on ports 9090/8443, graph seeded, app on port 3000
+
+## What is currently being implemented
+
+- Slice 2 finalisation: verification of determinism (two seed runs → identical results), evidence hash integrity verification, topology API temporal filtering, and updating handout / commit / push
+
+## Working rules (no negotiation)
+
+1. **Finish current slice before starting the next** — Slice 2 must be fully complete (UI, API, domain, HydraDB) before Slice 3 begins
+2. **Commit without attributions** — no `Co-Authored-By`, no "Generated with" footer on any commit
+3. **Push to GitHub** after each completed slice (`origin` = `https://github.com/tope-olajide/faultline.git`, branch `main`)
+4. **HydraDB is the only graph engine** — no mock/in-memory graph fallback, no Neo4j
+5. **No placeholder buttons, static graph data, or hardcoded results** — simulated data only in demo dataset/evaluation lab and must be labelled
+6. **Cypher only in `src/server/graph` and `src/server/hydradb`** — no Cypher elsewhere
+7. **Keep dev-status language out of the public README** — internal status lives in `docs/`
+8. **Testing policy**: lightweight verification per slice; comprehensive testing after functional slices
+9. **Deterministic caller-supplied ids** — low 53 bits of FNV-1a over `scope\u0000label\u0000externalId`, never 0
+10. **Write discipline**: node batches (`UNWIND … MERGE … SET n:Label, props`) before edge batches; edges use per-edge `MERGE` with inline props; bulk `UNWIND … CREATE` dedupes on `(src,dst,type)`
+
+## Notes for the next slice
+
+- Slice 3 will add LLM adapter for causal reasoning, persistent control-plane Postgres, and real connector adapters
+- Keep the same deterministic id scheme and write discipline
+- Temporal queries are now server-sideable; future slices can build on `getDependencies()` with `mode:'current'` / `'history'`

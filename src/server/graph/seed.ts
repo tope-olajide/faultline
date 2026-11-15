@@ -12,21 +12,22 @@ import {
   type NodeInput,
   type PropertyMap,
 } from './repository'
+import { collectSimulatedEvidence, simulatedConnectors, SCENARIO } from '../integrations/simulator'
+import { ingestEvidence } from '../evidence/ingest'
 
 /**
  * Demo dataset — a deterministic checkout platform with one open incident.
  *
- * This is the only simulated data in the product. Everything consuming it
- * (writes, reads, traversal, statistics) is real; the dataset simply stands in
- * for a connected cluster until Slice 7 adds live connectors. Every node carries
- * `source: demo-simulator` where a source applies so the UI can label it.
+ * Slice 2 adds temporal facts (a retired cache dependency), the topology entities
+ * behind them (namespace, workload, config change, event), connector sources, a
+ * third hypothesis that the Kubernetes observation refutes, and evidence payloads
+ * that are written into the local object store and referenced from the graph.
  */
 
 const SCOPE_NOTE: PropertyMap = { data_origin: 'demo-simulator' } as PropertyMap
 
 interface SeedNode extends NodeInput {
   key: string
-  /** Short description used by the UI graph inspector. */
   purpose: string
 }
 
@@ -51,9 +52,15 @@ const T = {
 }
 
 function dependencyEdge(
-  source: string,
   observedAt: string,
-  options: { verificationState?: 'verified' | 'provisional'; confidence?: number; source?: string } = {},
+  options: {
+    verificationState?: 'verified' | 'provisional'
+    confidence?: number
+    source?: string
+    validFrom?: string
+    validTo?: string
+    lastSeenAt?: string
+  } = {},
 ): PropertyMap {
   return {
     confidence_score: options.confidence ?? 0.93,
@@ -62,14 +69,15 @@ function dependencyEdge(
     verification_state: options.verificationState ?? 'verified',
     source: options.source ?? 'otel-traces',
     observed_at: observedAt,
-    valid_from: '2026-09-01T00:00:00Z',
-    valid_to: OPEN_ENDED,
+    valid_from: options.validFrom ?? '2026-09-01T00:00:00Z',
+    valid_to: options.validTo ?? OPEN_ENDED,
     last_verified_at: observedAt,
+    last_seen_at: options.lastSeenAt ?? observedAt,
     weight: 1,
   }
 }
 
-const nodes: SeedNode[] = [
+const baseNodes: SeedNode[] = [
   {
     key: 'project',
     label: 'Project',
@@ -104,6 +112,26 @@ const nodes: SeedNode[] = [
     externalId: 'cluster/prod-us-east-1',
     purpose: 'Compute cluster',
     properties: { name: 'prod-us-east-1', provider: 'aws' },
+  },
+  {
+    key: 'namespace',
+    label: 'Namespace',
+    externalId: 'namespace/prod-checkout',
+    purpose: 'Kubernetes namespace for checkout workloads',
+    properties: { name: 'prod-checkout', cluster: 'prod-us-east-1' },
+  },
+  {
+    key: 'workload',
+    label: 'Workload',
+    externalId: 'workload/checkout-service-7d9f',
+    purpose: 'Checkout deployment workload',
+    properties: {
+      kind: 'Deployment',
+      name: 'checkout-service',
+      replicas: 6,
+      image: 'checkout-service:2.14.3',
+      namespace: 'prod-checkout',
+    },
   },
   {
     key: 'svc-gateway',
@@ -216,6 +244,13 @@ const nodes: SeedNode[] = [
     properties: { name: 'redis-sessions', engine: 'redis-7.2', tier: 'cache.r6g.large' },
   },
   {
+    key: 'cache-legacy',
+    label: 'Cache',
+    externalId: 'cache/redis-cache-legacy/production',
+    purpose: 'Retired cache backend (historical dependency only)',
+    properties: { name: 'redis-cache-legacy', engine: 'redis-6.2', tier: 'cache.r5.large' },
+  },
+  {
     key: 'queue',
     label: 'Queue',
     externalId: 'queue/rabbitmq-events/production',
@@ -322,81 +357,30 @@ const nodes: SeedNode[] = [
     },
   },
   {
-    key: 'ev-metric',
-    label: 'Evidence',
-    externalId: 'evidence/ev-metric-pool-wait',
-    purpose: 'Metric anomaly evidence',
+    key: 'config-change',
+    label: 'ConfigChange',
+    externalId: 'configchange/cache-migration-2026-10-02',
+    purpose: 'Cache backend migration',
     properties: {
-      evidence_type: 'metric_anomaly',
-      source: 'prometheus',
-      source_record_id: 'promql:histogram_quantile(0.99,pg_pool_wait_seconds)',
-      observed_at: '2026-11-14T15:18:00Z',
-      window_start: T.windowStart,
-      window_end: T.windowEnd,
-      summary: 'Database connection wait p99 rose from 12 ms to 1.94 s on checkout-service, peaking at 15:19.',
-      object_uri: 's3://faultline-evidence/demo/ev-metric-pool-wait.json',
-      content_hash: 'sha256:5d1c0a9f7b3e',
-      reliability: 0.92,
-      redaction_status: 'clean',
+      key: 'CACHE_BACKEND',
+      change_type: 'update',
+      changed_at: '2026-10-02T10:04:00Z',
+      summary: 'CACHE_BACKEND moved from redis-cache-legacy to redis-sessions.',
+      actor: 'priya.raman',
+      redacted_diff_ref: 'config-audit:CACHE_BACKEND@2026-10-02',
     },
   },
   {
-    key: 'ev-trace',
-    label: 'Evidence',
-    externalId: 'evidence/ev-trace-db-timeout',
-    purpose: 'Trace evidence',
+    key: 'event-pods',
+    label: 'Event',
+    externalId: 'event/evt-checkout-pods-ready',
+    purpose: 'Pod health observation during the incident',
     properties: {
-      evidence_type: 'trace_excerpt',
-      source: 'tempo',
-      source_record_id: 'trace:4f8a91c2d7e3',
-      observed_at: '2026-11-14T15:24:41Z',
-      window_start: T.windowStart,
-      window_end: T.windowEnd,
-      summary:
-        '38% of checkout spans block on postgres-main for >2 s; the slow span starts after a successful auth call, ruling out gateway saturation.',
-      object_uri: 's3://faultline-evidence/demo/ev-trace-db-timeout.json',
-      content_hash: 'sha256:a71b22c9d410',
-      reliability: 0.88,
-      redaction_status: 'clean',
-    },
-  },
-  {
-    key: 'ev-logs',
-    label: 'Evidence',
-    externalId: 'evidence/ev-log-pool-exhausted',
-    purpose: 'Log pattern evidence',
-    properties: {
-      evidence_type: 'log_pattern',
-      source: 'loki',
-      source_record_id: 'logql:{service="checkout-service"} |= "pool_size"',
-      observed_at: '2026-11-14T15:17:00Z',
-      window_start: T.windowStart,
-      window_end: T.windowEnd,
-      summary: '2,410 pool-acquisition failures from pgx in the incident window, none in the preceding hour.',
-      object_uri: 's3://faultline-evidence/demo/ev-log-pool-exhausted.json',
-      content_hash: 'sha256:0c9e4bb11872',
-      reliability: 0.85,
-      redaction_status: 'clean',
-    },
-  },
-  {
-    key: 'ev-deploy',
-    label: 'Evidence',
-    externalId: 'evidence/ev-deployment-window',
-    purpose: 'Deployment correlation evidence',
-    properties: {
-      evidence_type: 'deployment_correlation',
-      source: 'github',
-      source_record_id: 'deployment:checkout-service@2.14.3',
-      observed_at: T.deployEnd,
-      window_start: T.deployStart,
-      window_end: T.deployEnd,
-      summary:
-        'checkout-service@2.14.3 completed 26 hours before onset, and no deployment occurred inside the incident window.',
-      object_uri: 's3://faultline-evidence/demo/ev-deployment-window.json',
-      content_hash: 'sha256:3f0d81c7a2b6',
-      reliability: 0.7,
-      redaction_status: 'clean',
+      event_type: 'pod_health_observation',
+      occurred_at: '2026-11-14T15:18:00Z',
+      source: 'kubernetes',
+      severity: 'info',
+      summary: 'All 6 checkout-service pods stayed Ready with zero restarts during the window.',
     },
   },
   {
@@ -433,10 +417,48 @@ const nodes: SeedNode[] = [
         'The change touches the retry path, but the deploy is 26h old and the service handled peak traffic in between without pool saturation.',
     },
   },
+  {
+    key: 'hyp-pods',
+    label: 'Hypothesis',
+    externalId: 'hypothesis/hyp-pod-crash-loop',
+    purpose: 'Ranked hypothesis 3 (refuted by Kubernetes observation)',
+    properties: {
+      statement: 'Node pressure or crash-looping checkout pods',
+      status: 'Candidate',
+      rank: 3,
+      confidence: 0.12,
+      confidence_type: 'uncalibrated_relative_score',
+      created_at: '2026-11-14T15:26:10Z',
+      next_check: 'Verify pod restarts and node pressure metrics',
+      rationale:
+        'Plausible given the latency, but the Kubernetes observation shows all pods Ready with zero restarts during the window.',
+    },
+  },
 ]
+
+// Connector sources come from the simulator so the graph mirrors what ingestion uses.
+const connectorNodes: SeedNode[] = simulatedConnectors().map((connector) => ({
+  key: `connector-${connector.provider}`,
+  label: 'ConnectorSource',
+  externalId: connector.externalId,
+  purpose: `${connector.provider} connector`,
+  properties: {
+    provider: connector.provider,
+    resource: connector.resource,
+    last_synced_at: connector.lastSyncedAt,
+    status: connector.status,
+    permission_scope: connector.permissionScope,
+    ...(connector.lastError ? { last_error: connector.lastError } : {}),
+  },
+}))
+
+const nodes: SeedNode[] = [...baseNodes, ...connectorNodes]
 
 const edges: SeedEdge[] = [
   { from: 'project', to: 'environment', type: 'CONTAINS' },
+  { from: 'project', to: 'namespace', type: 'CONTAINS' },
+  { from: 'cluster', to: 'namespace', type: 'CONTAINS' },
+  { from: 'namespace', to: 'workload', type: 'CONTAINS' },
 
   { from: 'svc-gateway', to: 'project', type: 'BELONGS_TO' },
   { from: 'svc-auth', to: 'project', type: 'BELONGS_TO' },
@@ -454,73 +476,88 @@ const edges: SeedEdge[] = [
 
   { from: 'svc-gateway', to: 'cluster', type: 'RUNS_ON' },
   { from: 'svc-auth', to: 'cluster', type: 'RUNS_ON' },
-  { from: 'svc-checkout', to: 'cluster', type: 'RUNS_ON' },
+  { from: 'svc-checkout', to: 'workload', type: 'RUNS_ON' },
   { from: 'svc-payment', to: 'cluster', type: 'RUNS_ON' },
   { from: 'svc-inventory', to: 'cluster', type: 'RUNS_ON' },
   { from: 'svc-notifications', to: 'cluster', type: 'RUNS_ON' },
   { from: 'db', to: 'cluster', type: 'RUNS_ON' },
   { from: 'cache', to: 'cluster', type: 'RUNS_ON' },
+  { from: 'cache-legacy', to: 'cluster', type: 'RUNS_ON' },
   { from: 'queue', to: 'cluster', type: 'RUNS_ON' },
+  { from: 'workload', to: 'cluster', type: 'RUNS_ON' },
 
   {
     from: 'svc-gateway',
     to: 'svc-auth',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-gateway', '2026-11-14T15:20:00Z'),
+    properties: dependencyEdge('2026-11-14T15:20:00Z'),
   },
   {
     from: 'svc-gateway',
     to: 'svc-checkout',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-gateway', '2026-11-14T15:20:00Z'),
+    properties: dependencyEdge('2026-11-14T15:20:00Z'),
   },
   {
     from: 'svc-checkout',
     to: 'svc-payment',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-checkout', '2026-11-14T15:24:00Z'),
+    properties: dependencyEdge('2026-11-14T15:24:00Z'),
   },
   {
     from: 'svc-checkout',
     to: 'svc-inventory',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-checkout', '2026-11-14T15:24:00Z'),
+    properties: dependencyEdge('2026-11-14T15:24:00Z'),
   },
   {
     from: 'svc-checkout',
     to: 'db',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-checkout', '2026-11-14T15:24:41Z', { confidence: 0.97 }),
+    properties: dependencyEdge('2026-11-14T15:24:41Z', { confidence: 0.97 }),
   },
   {
     from: 'svc-checkout',
     to: 'cache',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-checkout', '2026-11-14T15:24:00Z'),
+    properties: dependencyEdge('2026-11-14T15:24:00Z'),
+  },
+  {
+    from: 'svc-checkout',
+    to: 'cache-legacy',
+    type: 'DEPENDS_ON',
+    properties: dependencyEdge('2026-11-14T15:24:00Z', {
+      verificationState: 'provisional',
+      confidence: 0.62,
+      source: 'config-audit',
+      validFrom: '2024-03-02T11:20:00Z',
+      validTo: '2026-10-02T10:04:00Z',
+      lastSeenAt: '2026-10-02T10:03:00Z',
+    }),
   },
   {
     from: 'svc-payment',
     to: 'db',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-payment', '2026-11-14T15:22:00Z', { confidence: 0.9 }),
+    properties: dependencyEdge('2026-11-14T15:22:00Z', { confidence: 0.9 }),
   },
   {
     from: 'svc-payment',
     to: 'queue',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-payment', '2026-11-14T15:22:00Z'),
+    properties: dependencyEdge('2026-11-14T15:22:00Z'),
   },
   {
     from: 'svc-inventory',
     to: 'db',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-inventory', '2026-11-14T15:22:00Z', { confidence: 0.86 }),
+    properties: dependencyEdge('2026-11-14T15:22:00Z', { confidence: 0.86 }),
   },
   {
     from: 'svc-inventory',
     to: 'queue',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-inventory', '2026-11-14T15:22:00Z', {
+    properties: dependencyEdge('2026-11-14T15:22:00Z', {
       verificationState: 'provisional',
       confidence: 0.42,
       source: 'inferred-topology',
@@ -530,13 +567,13 @@ const edges: SeedEdge[] = [
     from: 'svc-auth',
     to: 'cache',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-auth', '2026-11-14T15:20:00Z'),
+    properties: dependencyEdge('2026-11-14T15:20:00Z'),
   },
   {
     from: 'svc-notifications',
     to: 'queue',
     type: 'DEPENDS_ON',
-    properties: dependencyEdge('svc-notifications', '2026-11-14T15:22:00Z'),
+    properties: dependencyEdge('2026-11-14T15:22:00Z'),
   },
 
   { from: 'repository', to: 'commit', type: 'CONTAINS' },
@@ -550,34 +587,28 @@ const edges: SeedEdge[] = [
   { from: 'incident', to: 'svc-payment', type: 'AFFECTS' },
   { from: 'incident', to: 'svc-gateway', type: 'AFFECTS' },
 
-  { from: 'svc-checkout', to: 'ev-metric', type: 'GENERATED' },
-  { from: 'svc-checkout', to: 'ev-trace', type: 'GENERATED' },
-  { from: 'svc-checkout', to: 'ev-logs', type: 'GENERATED' },
   { from: 'svc-checkout', to: 'log-pattern', type: 'GENERATED' },
   { from: 'svc-checkout', to: 'trace', type: 'GENERATED' },
   { from: 'db', to: 'metric-pool', type: 'GENERATED' },
+  { from: 'workload', to: 'event-pods', type: 'GENERATED' },
 
-  { from: 'ev-metric', to: 'metric-pool', type: 'DERIVED_FROM' },
-  { from: 'ev-logs', to: 'log-pattern', type: 'DERIVED_FROM' },
-  { from: 'ev-trace', to: 'trace', type: 'DERIVED_FROM' },
-  { from: 'ev-deploy', to: 'deployment', type: 'DERIVED_FROM' },
+  { from: 'project', to: 'connector-prometheus', type: 'CONTAINS' },
+  { from: 'project', to: 'connector-loki', type: 'CONTAINS' },
+  { from: 'project', to: 'connector-tempo', type: 'CONTAINS' },
+  { from: 'project', to: 'connector-github', type: 'CONTAINS' },
+  { from: 'project', to: 'connector-kubernetes', type: 'CONTAINS' },
+  { from: 'project', to: 'connector-config-audit', type: 'CONTAINS' },
 
-  { from: 'ev-metric', to: 'incident', type: 'OBSERVED_DURING' },
-  { from: 'ev-trace', to: 'incident', type: 'OBSERVED_DURING' },
-  { from: 'ev-logs', to: 'incident', type: 'OBSERVED_DURING' },
-  { from: 'ev-deploy', to: 'incident', type: 'OBSERVED_DURING' },
-
-  { from: 'ev-metric', to: 'hyp-pool', type: 'SUPPORTS' },
-  { from: 'ev-trace', to: 'hyp-pool', type: 'SUPPORTS' },
-  { from: 'ev-logs', to: 'hyp-pool', type: 'SUPPORTS' },
-  { from: 'ev-deploy', to: 'hyp-deploy', type: 'SUPPORTS' },
-  { from: 'ev-metric', to: 'hyp-deploy', type: 'CONTRADICTS' },
-  { from: 'ev-deploy', to: 'hyp-pool', type: 'CONTRADICTS' },
+  { from: 'svc-checkout', to: 'config-change', type: 'INTRODUCED_BY' },
+  { from: 'config-change', to: 'commit', type: 'CHANGED_BY' },
 
   { from: 'hyp-pool', to: 'db', type: 'POSSIBLY_CAUSED_BY' },
   { from: 'hyp-pool', to: 'svc-checkout', type: 'POSSIBLY_CAUSED_BY' },
   { from: 'hyp-deploy', to: 'deployment', type: 'POSSIBLY_CAUSED_BY' },
   { from: 'hyp-deploy', to: 'commit', type: 'POSSIBLY_CAUSED_BY' },
+  { from: 'hyp-pods', to: 'workload', type: 'POSSIBLY_CAUSED_BY' },
+
+  { from: 'event-pods', to: 'incident', type: 'OBSERVED_DURING' },
 ]
 
 export interface SeedSummary {
@@ -595,17 +626,19 @@ export interface SeedSummary {
 }
 
 export function demoNodeIds(scope: DemoScope = demoScope): number[] {
-  return nodes.map((node) => demoEntityId(node.label, node.externalId, scope))
+  const evidenceIds = collectSimulatedEvidence().map((draft) =>
+    demoEntityId('Evidence', draft.externalId, scope),
+  )
+  const connectorIds = simulatedConnectors().map((connector) =>
+    demoEntityId('ConnectorSource', connector.externalId, scope),
+  )
+  return [
+    ...nodes.map((node) => demoEntityId(node.label, node.externalId, scope)),
+    ...evidenceIds,
+    ...connectorIds,
+  ]
 }
 
-/**
- * Seed (or re-seed) the demo graph.
- *
- * Re-seeding deletes the ids this dataset owns first, then writes nodes and
- * edges. That makes the result deterministic *and* refreshes properties, which a
- * pure `MERGE` re-run would not do (HydraDB `MERGE` does not update properties on
- * an existing edge).
- */
 export async function seedDemoGraph(
   options: { reset?: boolean; scope?: DemoScope } = {},
 ): Promise<SeedSummary> {
@@ -613,22 +646,34 @@ export async function seedDemoGraph(
   const started = Date.now()
   const ids = demoNodeIds(scope)
 
-  // Always clear owned ids: node property updates go through MERGE … SET (cheap)
-  // but edge properties are inline, so a clean write is the only way to guarantee
-  // the dataset matches this definition.
   const deleted = await deleteNodes(ids)
 
   const idByKey = new Map<string, number>()
   for (const node of nodes) idByKey.set(node.key, demoEntityId(node.label, node.externalId, scope))
 
-  // Labels and properties first: a node that only ever appears as an edge
-  // endpoint carries no label, and label-anchored counts would silently miss it.
+  const evidenceDrafts = collectSimulatedEvidence()
+  for (const draft of evidenceDrafts) {
+    idByKey.set(draft.externalId, demoEntityId('Evidence', draft.externalId, scope))
+  }
+
+  // Evidence relationships (SUPPORTS/CONTRADICTS) reference evidence by external id.
+  const evidenceEdges: SeedEdge[] = [
+    { from: 'evidence/ev-metric-pool-wait', to: 'hyp-pool', type: 'SUPPORTS' },
+    { from: 'evidence/ev-trace-db-timeout', to: 'hyp-pool', type: 'SUPPORTS' },
+    { from: 'evidence/ev-log-pool-exhausted', to: 'hyp-pool', type: 'SUPPORTS' },
+    { from: 'evidence/ev-deployment-window', to: 'hyp-deploy', type: 'SUPPORTS' },
+    { from: 'evidence/ev-metric-pool-wait', to: 'hyp-deploy', type: 'CONTRADICTS' },
+    { from: 'evidence/ev-deployment-window', to: 'hyp-pool', type: 'CONTRADICTS' },
+    { from: 'evidence/ev-k8s-pod-health', to: 'hyp-pods', type: 'CONTRADICTS' },
+  ]
+  const allEdges = [...edges, ...evidenceEdges]
+
   const nodeResult = await upsertNodes(
     nodes.map((node) => ({ label: node.label, externalId: node.externalId, properties: node.properties })),
     scope,
   )
 
-  const edgeInputs: EdgeInput[] = edges.map((edge) => {
+  const edgeInputs: EdgeInput[] = allEdges.map((edge) => {
     const src = idByKey.get(edge.from)
     const dst = idByKey.get(edge.to)
     if (src === undefined || dst === undefined) {
@@ -637,6 +682,9 @@ export async function seedDemoGraph(
     return { type: edge.type, src, dst, properties: edge.properties }
   })
   const edgeResult = await upsertEdges(edgeInputs, scope)
+
+  // Write evidence payloads into object storage and the graph.
+  const ingestion = await ingestEvidence(evidenceDrafts, scope)
 
   invalidateStatsCache()
   const stats = await graphStats({ fresh: true })
@@ -650,8 +698,8 @@ export async function seedDemoGraph(
 
   return {
     scope: scopeKey(scope),
-    nodes: nodeResult.written,
-    edges: edgeResult.written,
+    nodes: nodeResult.written + ingestion.evidenceNodes,
+    edges: edgeResult.written + ingestion.relationships,
     nodeRequests: nodeResult.requests,
     edgeRequests: edgeResult.requests,
     deleted: deleted.deleted,

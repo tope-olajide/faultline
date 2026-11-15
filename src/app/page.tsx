@@ -48,6 +48,7 @@ export default async function OverviewPage() {
 
   const hasData = health.hasDemoData
   const incidents = hasData ? await listNodes('Incident', { limit: 5 }) : []
+  const connectorNodes = hasData ? await listNodes('ConnectorSource', { limit: 20 }) : []
 
   let dependencyPath: GraphPath | null = null
   if (hasData) {
@@ -277,6 +278,39 @@ export default async function OverviewPage() {
                   <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
                     Counts and ids in this view come from the same snapshot pinned by the bookmark above.
                   </p>
+                </PanelBody>
+              </Panel>
+
+              <Panel>
+                <PanelHeader
+                  eyebrow="Connector freshness"
+                  title="Connected sources"
+                  description="Last sync time for each simulated connector."
+                />
+                <PanelBody className="pt-2">
+                  <dl>
+                    {connectorNodes.map((connector) => {
+                      const p = connector.properties as Record<string, unknown>
+                      const status = String(p.status ?? 'healthy')
+                      const synced = String(p.last_synced_at ?? '')
+                      return (
+                        <KeyValue key={connector.id} label={`${String(p.provider ?? '')} · ${String(p.resource ?? '')}`}>
+                          <div className="flex items-center gap-2">
+                            <Badge tone={status === 'healthy' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'}>
+                              {status}
+                            </Badge>
+                            <span className="mono text-[11px] text-ink-dim">{formatUtc(synced)}</span>
+                          </div>
+                        </KeyValue>
+                      )
+                    })}
+                  </dl>
+                  <div className="mt-3">
+                    <ButtonLink href="/evidence" size="sm">
+                      Evidence &amp; sources
+                      <ArrowUpRight aria-hidden size={12} />
+                    </ButtonLink>
+                  </div>
                 </PanelBody>
               </Panel>
 

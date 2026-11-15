@@ -1,6 +1,7 @@
 import { HydraDbClient } from '../hydradb/client'
 import type { GraphPath } from '../hydradb/types'
 import { demoScope, hydraDbConfig, type DemoScope } from '../config'
+import { defaultAsOf, isCurrent } from './temporal'
 import { demoEntityId } from './ids'
 import {
   GRAPH_LABELS,
@@ -343,6 +344,40 @@ export async function graphStats(options: { fresh?: boolean } = {}): Promise<Gra
 
 export function invalidateStatsCache(): void {
   statsCache = null
+}
+
+export interface DependencyView {
+  nodeId: number
+  label: GraphLabel
+  mode: 'current' | 'history'
+  asOf: string
+  dependencies: NeighborEdge[]
+}
+
+/**
+ * Temporal dependency view for one node.
+ *
+ * `current` returns only edges whose `[valid_from, valid_to)` window contains
+ * `asOf`; `history` returns the rest (closed or future facts). Filtering happens
+ * in the application layer because HydraDB rejects null predicates and stores the
+ * open-ended window as an explicit sentinel.
+ */
+export async function getDependencies(
+  nodeId: number,
+  label: GraphLabel,
+  options: { mode?: 'current' | 'history'; asOf?: string } = {},
+): Promise<DependencyView> {
+  const mode = options.mode ?? 'current'
+  const asOf = options.asOf ?? defaultAsOf()
+  const neighborhood = await getNeighborhood(nodeId, label, { perPatternLimit: 100 })
+  const candidates = neighborhood.filter(
+    (edge) => edge.relationship === 'DEPENDS_ON' && edge.direction === 'outgoing',
+  )
+  const dependencies =
+    mode === 'current'
+      ? candidates.filter((edge) => isCurrent(edge.edge.valid_from, edge.edge.valid_to, asOf))
+      : candidates.filter((edge) => !isCurrent(edge.edge.valid_from, edge.edge.valid_to, asOf))
+  return { nodeId, label, mode, asOf, dependencies }
 }
 
 /** Relationship types that currently have at least one edge of each source label. */
