@@ -678,3 +678,157 @@ export interface EdgeMutationResult {
   contradiction_delta: number
   confidence_delta: number
 }
+
+
+/** Track a path template for reuse in causal analysis. */
+export async function trackPathTemplate(signature: string): Promise<{ newRequest: boolean; alreadyProcessed: boolean }> {
+  // Check if already processed by looking for a PathTemplate with this signature
+  const existing = await graphClient().query<{ count: number }>(`
+    MATCH (p:PathTemplate {signature: $sig})
+    RETURN count(p) AS count
+  `, { sig: signature })
+  const already = Number(existing.rows[0]?.count ?? 0) > 0
+  return { newRequest: !already, alreadyProcessed: already }
+}
+
+/** Create a new PathTemplate node and return it. */
+export async function createPathTemplate({
+  signature,
+  pathScore = 0,
+  successCount = 0,
+  failureCount = 0,
+}: {
+  signature: string
+  pathScore?: number
+  successCount?: number
+  failureCount?: number
+}): Promise<NodeRecord> {
+  const created = await upsertNodes([
+    {
+      label: 'PathTemplate',
+      externalId: `pt-${signature}`,
+      properties: {
+        external_id: `pt-${signature}`,
+        signature,
+        path_score: pathScore,
+        success_count: successCount,
+        failure_count: failureCount,
+        created_at: new Date().toISOString(),
+      },
+    },
+  ])
+  return {
+    id: created.written > 0 ? 1 : 0,
+    label: 'PathTemplate' as const,
+    properties: {
+      external_id: `pt-${signature}`,
+      signature,
+      path_score: pathScore,
+      success_count: successCount,
+      failure_count: failureCount,
+      created_at: new Date().toISOString(),
+    },
+  }
+}
+
+/** Record an EvaluationRun for a causal analysis question. */
+export async function createEvaluationRun({
+  question,
+  nodeId,
+  label,
+  analysis,
+  confidence,
+  suggestedEdges,
+  dataGap,
+}: {
+  question: string
+  nodeId: number
+  label: string
+  analysis: string
+  confidence: number
+  suggestedEdges: Array<{ type: string; reason: string }>
+  dataGap: string
+}): Promise<NodeRecord> {
+  const externalId = `eval-${nodeId}-${Date.now()}`
+  const created = await upsertNodes([
+    {
+      label: 'EvaluationRun',
+      externalId,
+      properties: {
+        external_id: externalId,
+        question,
+        node_id: String(nodeId),
+        label,
+        analysis,
+        confidence: String(confidence),
+        suggested_edges: JSON.stringify(suggestedEdges),
+        data_gap: dataGap,
+        created_at: new Date().toISOString(),
+        status: 'completed',
+      },
+    },
+  ])
+  return {
+    id: created.written > 0 ? 1 : 0,
+    label: 'EvaluationRun' as const,
+    properties: {
+      external_id: externalId,
+      question,
+      node_id: String(nodeId),
+      label,
+      analysis,
+      confidence: String(confidence),
+      suggested_edges: JSON.stringify(suggestedEdges),
+      data_gap: dataGap,
+      created_at: new Date().toISOString(),
+      status: 'completed',
+    },
+  }
+}
+
+/** Entity match candidate - tracks a candidate entity match for deduplication. */
+export async function createEntityMatchCandidate({
+  leftExternalId,
+  rightExternalId,
+  leftLabel,
+  rightLabel,
+  similarityScore,
+}: {
+  leftExternalId: string
+  rightExternalId: string
+  leftLabel: GraphLabel
+  rightLabel: GraphLabel
+  similarityScore: number
+}): Promise<NodeRecord> {
+  const externalId = `emc-${leftExternalId}-${rightExternalId}`
+  const created = await upsertNodes([
+    {
+      label: 'EntityMatchCandidate',
+      externalId,
+      properties: {
+        external_id: externalId,
+        left_external_id: leftExternalId,
+        right_external_id: rightExternalId,
+        left_label: leftLabel,
+        right_label: rightLabel,
+        similarity_score: String(similarityScore),
+        created_at: new Date().toISOString(),
+        status: 'pending',
+      },
+    },
+  ])
+  return {
+    id: created.written > 0 ? 1 : 0,
+    label: 'EntityMatchCandidate' as const,
+    properties: {
+      external_id: externalId,
+      left_external_id: leftExternalId,
+      right_external_id: rightExternalId,
+      left_label: leftLabel,
+      right_label: rightLabel,
+      similarity_score: String(similarityScore),
+      created_at: new Date().toISOString(),
+      status: 'pending',
+    },
+  }
+}
