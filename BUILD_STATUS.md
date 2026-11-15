@@ -27,3 +27,17 @@
 
 ## Running state
 - Docker Compose up, HydraDB reachable on ports 9090/8443, graph seeded, app on port 3000
+## Slice 4 ✅ COMPLETE
+- **Feedback API**: `POST /api/feedback` taking `{requestKey, outcome, actorRef, reason, linkedEvidenceId, targetEdge}` and returning `{feedback, edgeChanges}`; idempotent via requestKey deduplication
+- **Graph mutations**: `support_count` / `contradiction_count` / `confidence_score` edge properties updated per outcome
+  - `confirm` → +1 support_count, +0.1 confidence_score
+  - `reject` → +1 contradiction_count, -0.1 confidence_score
+  - `contributing_factor` → +0.5 support_count, +0.05 confidence_score
+  - `inconclusive` → no reliability change
+  - `stale_relationship` → no reliability change
+  - `incorrect_mapping` → +1 contradiction_count, -0.15 confidence_score
+- **LearningUpdate records**: created per feedback submission with `before_state`/`after_state` snapshots (update_type, reason, status)
+- **New relationship types** in `src/server/graph/schema.ts`: `CONFIRMED_BY`, `REJECTED_BY`, `CONTRIBUTES_TO`, `STALE_RELATIONSHIP`, `INCORRECT_MAPPING`
+- **New edge properties tracked**: `confidence_score`, `support_count`, `contradiction_count`
+- **Idempotency**: feedback carries a request key; replays do not double-apply (verified via `trackFeedbackKey` check)
+- **Verification**: `npx tsc --noEmit` clean; `npm run build` succeeds (23 routes); health checks pass (10/10 probes); idempotency verified (replaying same requestKey applies nothing twice)
