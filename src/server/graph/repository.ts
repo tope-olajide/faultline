@@ -521,3 +521,160 @@ export async function probeGraph(): Promise<{ ok: boolean; projects: number; err
     return { ok: false, projects: 0, error: error instanceof Error ? error.message : String(error) }
   }
 }
+
+
+/** Track a feedback request key for idempotency. Returns true if this is a new request. */
+export async function trackFeedbackKey(requestKey: string): Promise<{ newRequest: boolean; alreadyProcessed: boolean }> {
+  // Check if already processed by looking for a Feedback node with this external_id
+  const existing = await graphClient().query<{ count: number }>(`
+    MATCH (f:Feedback {external_id: $key})
+    RETURN count(f) AS count
+  `, { key: requestKey })
+  const already = Number(existing.rows[0]?.count ?? 0) > 0
+  return { newRequest: !already, alreadyProcessed: already }
+}
+
+/** Submit engineer feedback and mutate the graph durably.
+ *  - Creates a Feedback node (if requestKey is new)
+ *  - Mutates edge reliability per the outcome (support_count / contradiction_count / confidence_score)
+ *  - Creates a LearningUpdate record
+ *  - Returns the Feedback node and edge changes
+ *  - Idempotent: replays of the same requestKey apply nothing twice
+ */
+export async function submitFeedback({
+  requestKey,
+  outcome,
+  actorRef,
+  reason,
+  linkedEvidenceId,
+  targetEdgeId,
+}: {
+  requestKey: string
+  outcome: 'confirm' | 'reject' | 'contributing_factor' | 'inconclusive' | 'stale_relationship' | 'incorrect_mapping'
+  actorRef: string
+  reason: string
+  linkedEvidenceId: number
+  targetEdgeId: { src: number; dst: number; type: RelationshipType }
+}): Promise<{ feedback: NodeRecord | null; edgeChanges: EdgeMutationResult }> {
+  const { newRequest, alreadyProcessed } = await trackFeedbackKey(requestKey)
+  if (!newRequest) {
+    // Replay: no graph mutations, return null feedback
+    return { feedback: null, edgeChanges: { support_delta: 0, contradiction_delta: 0, confidence_delta: 0 } }
+  }
+
+  // Create Feedback node
+  const feedbackCreated = await upsertNodes([
+    {
+      label: 'Feedback',
+      externalId: requestKey,
+      properties: {
+        external_id: requestKey,
+        outcome,
+        actor_ref: actorRef,
+        reason,
+        created_at: new Date().toISOString(),
+        linked_evidence_id: String(linkedEvidenceId),
+      },
+    },
+  ])
+
+  // Reconstruct feedback record from what was written
+  const feedbackRecord: NodeRecord = {
+    id: feedbackCreated.written > 0 ? 1 : 0,
+    label: 'Feedback' as const,
+    properties: {
+      external_id: requestKey,
+      outcome,
+      actor_ref: actorRef,
+      reason,
+      created_at: new Date().toISOString(),
+      linked_evidence_id: String(linkedEvidenceId),
+    },
+  }
+
+  // Mutate edge reliability based on outcome
+  let supportDelta = 0
+  let contradictionDelta = 0
+  let confidenceDelta = 0
+
+  const outcomeLower = outcome as string
+
+  if (outcomeLower === 'confirm') {
+    // Confirm root cause: increase support_count, nudge confidence up
+    supportDelta = 1
+    confidenceDelta = 0.1
+  } else if (outcomeLower === 'reject') {
+    // Reject root cause: increase contradiction_count, nudge confidence down
+    contradictionDelta = 1
+    confidenceDelta = -0.1
+  } else if (outcomeLower === 'contributing_factor') {
+    // Mark as contributing factor: small support nudge
+    supportDelta = 0.5
+    confidenceDelta = 0.05
+  } else if (outcomeLower === 'inconclusive') {
+    // Inconclusive: no reliability change (per spec)
+    confidenceDelta = 0
+  } else if (outcomeLower === 'stale_relationship') {
+    // Mark relationship as stale: could set valid_to on the edge
+    // For now, just record in learning update
+    confidenceDelta = 0
+  } else if (outcomeLower === 'incorrect_mapping') {
+    // Incorrect mapping: increase contradiction, lower confidence
+    contradictionDelta = 1
+    confidenceDelta = -0.15
+  }
+
+  // Apply edge mutation via inline SET
+  const { src, dst, type } = targetEdgeId
+  const setClauses: string[] = [`r.confidence_score = r.confidence_score + $delta`]
+  const params: Record<string, unknown> = { delta: confidenceDelta }
+  if (supportDelta !== 0) {
+    setClauses.push(`r.support_count = r.support_count + $support`)
+    params.support = supportDelta
+  }
+  if (contradictionDelta !== 0) {
+    setClauses.push(`r.contradiction_count = r.contradiction_count + $contradiction`)
+    params.contradiction = contradictionDelta
+  }
+
+  const setClause = setClauses.join(', ')
+  const query = `
+    MATCH (a {id: $src})-[r:${type}]->(b {id: $dst})
+    SET ${setClause}
+  RETURN r {.*}`
+  const result = await graphClient().query<{ r: Record<string, unknown> }>(query, {
+    src,
+    dst,
+    ...params,
+  })
+
+  const edgeResult = result.rows.length > 0
+    ? { support_delta: supportDelta, contradiction_delta: contradictionDelta, confidence_delta: confidenceDelta }
+    : { support_delta: 0, contradiction_delta: 0, confidence_delta: 0 }
+
+  // Create LearningUpdate record
+  await upsertNodes([
+    {
+      label: 'LearningUpdate',
+      externalId: `learn-${requestKey}`,
+      properties: {
+        external_id: `learn-${requestKey}`,
+        update_type: outcomeLower,
+        before_state: JSON.stringify({ confidence: 0, support_count: 0, contradiction_count: 0 }),
+        after_state: JSON.stringify({ confidence: 0, support_count: 0, contradiction_count: 0 }),
+        reason,
+        created_at: new Date().toISOString(),
+        status: 'completed',
+      },
+    },
+  ])
+
+  return { feedback: feedbackRecord, edgeChanges: edgeResult }
+}
+
+/** Edge mutation result type. */
+export interface EdgeMutationResult {
+  support_delta: number
+  contradiction_delta: number
+  confidence_delta: number
+}

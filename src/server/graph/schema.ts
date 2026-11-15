@@ -113,6 +113,11 @@ export const RELATIONSHIPS = {
   },
   HAS_EVIDENCE: { from: ['Incident', 'Hypothesis', 'Finding', 'Investigation'], to: ['Evidence'] },
   MATCH_CANDIDATE: { from: ['EntityMatchCandidate'], to: ['Service', 'Resource', 'Database', 'Cache', 'Queue', 'Workload'] },
+  CONFIRMED_BY: { from: ['Incident', 'Hypothesis', 'Finding'], to: ['Service', 'Deployment', 'Commit', 'ConfigChange', 'Resource', 'Database'] },
+  REJECTED_BY: { from: ['Incident', 'Hypothesis', 'Finding'], to: ['Service', 'Deployment', 'Commit', 'ConfigChange', 'Resource', 'Database'] },
+  CONTRIBUTES_TO: { from: ['Incident', 'Hypothesis', 'Finding'], to: ['Service', 'Deployment', 'Commit', 'ConfigChange', 'Resource', 'Database', 'Cache', 'Queue', 'Workload'] },
+  STALE_RELATIONSHIP: { from: ['Service', 'Database', 'Cache', 'Queue', 'Resource', 'Workload'], to: ['Service', 'Database', 'Cache', 'Queue', 'Resource', 'Workload'] },
+  INCORRECT_MAPPING: { from: ['Evidence', 'Observation', 'Resource', 'Service', 'Deployment', 'ConfigChange'], to: ['Evidence', 'Observation', 'Resource', 'Service', 'Deployment', 'ConfigChange'] },
 } as const satisfies Record<string, { from: readonly GraphLabel[]; to: readonly GraphLabel[] }>
 
 export type RelationshipType = keyof typeof RELATIONSHIPS
